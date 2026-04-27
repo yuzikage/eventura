@@ -83,7 +83,7 @@ techtonics_se/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/22f3000525/techtonics_se.git
+git clone https://github.com/yuzikage/eventura.git
 cd techtonics_se
 ```
 
