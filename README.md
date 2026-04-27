@@ -84,7 +84,7 @@ techtonics_se/
 
 ```bash
 git clone https://github.com/yuzikage/eventura.git
-cd techtonics_se
+cd eventura
 ```
 
 ### 2. Create and activate a virtual environment
