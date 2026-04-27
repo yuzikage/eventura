@@ -1,0 +1,2784 @@
+openapi: 3.0.3
+
+info:
+  title: Eventura API
+  description: |
+    REST API for the Eventura Event Management Platform.
+    A small business event management system supporting customers,
+    event managers, and administrators.
+ 
+    ## Authentication
+    Most endpoints require a Bearer JWT token in the Authorization header.
+    Obtain a token by calling POST /api/v1/auth/login.
+ 
+    ## User Roles
+    - **customer** — can plan events, create bookings, view own bookings
+    - **manager** — can view all bookings, update booking status
+    - **admin** — full access including venue and content management
+ 
+    ## User Stories Mapped to Endpoints
+ 
+    | Story | Description | Endpoints |
+    |-------|-------------|-----------|
+    | US-C1 | Customer can plan event online (wizard steps) | GET /event-types, GET /venues, GET /themes, GET /packages/*, POST /bookings |
+    | US-C2 | Customer can schedule a meeting with event manager | POST /bookings (meeting_date + meeting_time), GET /bookings/slots |
+    | US-C3 | Customer can interact with AI chatbot | POST /chat |
+    | US-C4 | Customer can compare packages | GET /packages/events, GET /packages/photography, GET /packages/catering |
+    | US-C5 | Customer can see theme visual preview | GET /themes (images array) |
+    | US-C6 | Customer can input guest count and see cost changes | GET /packages/catering (price_per_head × guest_count) |
+    | US-C7 | Customer can get an AI-powered event recommendation | POST /ai/recommend |
+    | US-M1 | Manager can view all scheduled bookings | GET /bookings/all, PATCH /bookings/{id}/status |
+    | US-M2 | Manager can see customer selections | GET /bookings/{id} (full expanded objects) |
+    | US-M3 | Manager can receive notifications about new bookings | GET /bookings/all?status=pending |
+    | US-M4 | Manager can be notified of scheduling conflicts | GET /bookings/conflicts |
+    | US-M5 | Manager can view an AI-generated review of a booking | GET /bookings/{id}/review |
+    | US-A1 | Admin can monitor bookings and analytics | GET /admin/stats, GET /bookings/all |
+    | US-A2 | Admin can see revenue reports | GET /admin/revenue |
+    | US-A3 | Admin can update venues, themes, and packages | POST/PUT/DELETE /venues, /themes, /packages/* |
+ 
+    ## Sprint 2 Changes
+ 
+    The following features were added in Sprint 2 based on user feedback:
+ 
+    - **RAG-based chatbot** (`POST /chat`) — upgraded to inject semantically
+      relevant knowledge chunks (policies, FAQs, planning tips) alongside live
+      DB data on every request. Response shape unchanged.
+    - **AI Event Recommender** (`POST /ai/recommend`) — new endpoint. Customer
+      describes their event in plain language and receives a fully specified
+      recommendation (venue, theme, all three packages) with reasons. Includes
+      budget and capacity validation.
+    - **Manager Booking Review** (`GET /bookings/{id}/review`) — new endpoint.
+      Returns an AI-generated structured assessment of a booking with flags for
+      issues such as capacity concerns or approaching event dates, and a
+      suggested next action for the manager.
+ 
+  version: "2.0.0"
+  contact:
+    name: Techtonics — IITM BS Software Engineering
+
+servers:
+  - url: http://localhost:5000/api/v1
+    description: Local development server
+
+tags:
+  - name: Auth
+    description: Customer and staff authentication
+  - name: Event Types
+    description: Event type listings (Wedding, Birthday, Corporate etc.)
+  - name: Venues
+    description: Venue listings and management
+  - name: Themes
+    description: Event theme listings and management
+  - name: Packages
+    description: Event, photography and catering packages
+  - name: Bookings
+    description: Create and manage event bookings
+  - name: Admin
+    description: Admin-only routes for revenue and analytics
+  - name: Chat
+    description: AI-powered chatbot powered by Claude Haiku
+  - name: AI
+    description: AI-powered recommendation and booking review endpoints
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+
+    # ── Auth ──────────────────────────────────────────────────────
+    SignupRequest:
+      type: object
+      required: [name, email, password, phone]
+      properties:
+        name:
+          type: string
+          example: Priya Sharma
+        email:
+          type: string
+          format: email
+          example: priya@example.com
+        password:
+          type: string
+          minLength: 6
+          example: secret123
+        phone:
+          type: string
+          example: "9876543210"
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: priya@example.com
+        password:
+          type: string
+          example: secret123
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        user:
+          $ref: '#/components/schemas/User'
+
+    # ── User ──────────────────────────────────────────────────────
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        name:
+          type: string
+          example: Priya Sharma
+        email:
+          type: string
+          example: priya@example.com
+        phone:
+          type: string
+          example: "9876543210"
+        role:
+          type: string
+          enum: [customer, manager, admin]
+          example: customer
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Event Type ────────────────────────────────────────────────
+    EventType:
+      type: object
+      properties:
+        id:
+          type: string
+          example: et1
+        label:
+          type: string
+          example: Wedding
+        description:
+          type: string
+          example: Intimate to grand celebrations
+        icon:
+          type: string
+          example: "💍"
+
+    # ── Venue ─────────────────────────────────────────────────────
+    Venue:
+      type: object
+      properties:
+        id:
+          type: string
+          example: v1
+        name:
+          type: string
+          example: The Grand Pavilion
+        location:
+          type: string
+          example: Coochbehar Central
+        capacity:
+          type: integer
+          example: 500
+        price:
+          type: number
+          example: 120000.0
+        is_available:
+          type: boolean
+          example: true
+
+    VenueRequest:
+      type: object
+      required: [name, location, capacity, price]
+      properties:
+        name:
+          type: string
+          example: The Grand Pavilion
+        location:
+          type: string
+          example: Coochbehar Central
+        capacity:
+          type: integer
+          example: 500
+        price:
+          type: number
+          example: 120000.0
+        is_available:
+          type: boolean
+          default: true
+
+    # ── Theme ─────────────────────────────────────────────────────
+    Theme:
+      type: object
+      properties:
+        id:
+          type: string
+          example: t1
+        name:
+          type: string
+          example: Royal Marigold
+        description:
+          type: string
+          example: Warm golds and deep saffron
+        is_active:
+          type: boolean
+          example: true
+        images:
+          type: array
+          items:
+            type: string
+          example:
+            - https://images.unsplash.com/photo-1519225421980?w=900
+            - https://images.unsplash.com/photo-1583939003579?w=900
+
+    ThemeRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: Royal Marigold
+        description:
+          type: string
+          example: Warm golds and deep saffron
+        is_active:
+          type: boolean
+          default: true
+        images:
+          type: array
+          items:
+            type: string
+          description: List of image URLs for the theme carousel
+
+    # ── Packages ──────────────────────────────────────────────────
+    EventPackage:
+      type: object
+      properties:
+        id:
+          type: string
+          example: pk1
+        label:
+          type: string
+          example: Premium
+        price:
+          type: number
+          example: 35000.0
+        features:
+          type: array
+          items:
+            type: string
+          example: ["Premium floral decor", "2 coordinators", "8-hour duration"]
+        is_active:
+          type: boolean
+          example: true
+
+    PhotographyPackage:
+      type: object
+      properties:
+        id:
+          type: string
+          example: ph1
+        label:
+          type: string
+          example: Cinematic
+        price:
+          type: number
+          example: 32000.0
+        features:
+          type: array
+          items:
+            type: string
+          example: ["Full-day coverage", "2 photographers + videographer", "Highlight reel"]
+        is_active:
+          type: boolean
+          example: true
+
+    CateringPackage:
+      type: object
+      properties:
+        id:
+          type: string
+          example: c1
+        label:
+          type: string
+          example: Royal Feast
+        price_per_head:
+          type: number
+          example: 950.0
+        features:
+          type: array
+          items:
+            type: string
+          example: ["Multi-cuisine spread", "6 starters", "Premium dessert lounge"]
+        is_active:
+          type: boolean
+          example: true
+
+    EventPackageRequest:
+      type: object
+      required: [label, price]
+      properties:
+        label:
+          type: string
+          example: Premium
+        price:
+          type: number
+          example: 35000.0
+        features:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+          default: true
+
+    PhotographyPackageRequest:
+      type: object
+      required: [label, price]
+      properties:
+        label:
+          type: string
+          example: Cinematic
+        price:
+          type: number
+          example: 32000.0
+        features:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+          default: true
+
+    CateringPackageRequest:
+      type: object
+      required: [label, price_per_head]
+      properties:
+        label:
+          type: string
+          example: Royal Feast
+        price_per_head:
+          type: number
+          example: 950.0
+        features:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+          default: true
+
+    # ── Booking ───────────────────────────────────────────────────
+    BookingRequest:
+      type: object
+      required:
+        - event_type_id
+        - venue_id
+        - theme_id
+        - guest_count
+        - event_package_id
+        - photography_package_id
+        - catering_package_id
+        - event_date
+        - meeting_date
+        - meeting_time
+      properties:
+        event_type_id:
+          type: string
+          example: et1
+        venue_id:
+          type: string
+          example: v1
+        theme_id:
+          type: string
+          example: t1
+        guest_count:
+          type: integer
+          example: 150
+        event_package_id:
+          type: string
+          example: pk2
+        photography_package_id:
+          type: string
+          example: ph2
+        catering_package_id:
+          type: string
+          example: c2
+        event_date:
+          type: string
+          format: date
+          description: The actual date the event takes place at the venue. Used for venue conflict detection.
+          example: "2026-09-20"
+        meeting_date:
+          type: string
+          format: date
+          description: The date of the customer's consultation meeting with the event manager.
+          example: "2026-08-15"
+        meeting_time:
+          type: string
+          example: "11:00 AM"
+        meeting_notes:
+          type: string
+          example: Prefer outdoor setup
+        total_estimated_cost:
+          type: number
+          example: 185000.0
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: string
+        booking_reference:
+          type: string
+          example: EVT-A3F2K
+        user_id:
+          type: string
+        event_type_id:
+          type: string
+        venue_id:
+          type: string
+        theme_id:
+          type: string
+        guest_count:
+          type: integer
+        event_package_id:
+          type: string
+        photography_package_id:
+          type: string
+        catering_package_id:
+          type: string
+        event_date:
+          type: string
+          format: date
+          description: The actual date the event takes place at the venue.
+          example: "2026-09-20"
+        meeting_date:
+          type: string
+          format: date
+          description: The date of the customer's consultation meeting with the event manager.
+          example: "2026-08-15"
+        meeting_time:
+          type: string
+        meeting_notes:
+          type: string
+        total_estimated_cost:
+          type: number
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled]
+        created_at:
+          type: string
+          format: date-time
+
+    BookingStatusUpdate:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [pending, confirmed, cancelled]
+          example: confirmed
+
+    # ── Chat ──────────────────────────────────────────────────────
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+          example: user
+        content:
+          type: string
+          example: What venues do you have?
+
+    ChatRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+          description: |
+            Full conversation history — include every user and assistant
+            turn since the chat opened. The backend forwards the entire
+            array to the AI so context is preserved across turns.
+
+    ChatResponse:
+      type: object
+      properties:
+        reply:
+          type: string
+          example: "We have three venues available: The Grand Pavilion..."
+
+    # ── Errors ────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Not found
+        message:
+          type: string
+          example: Could not find requested item
+
+    ValidationError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Validation error
+        messages:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          example:
+            email: ["Not a valid email address"]
+            password: ["Shorter than minimum length 6"]
+
+    # ── AI Recommend ──────────────────────────────────────────────
+    AIRecommendRequest:
+      type: object
+      required: [description, guest_count]
+      properties:
+        description:
+          type: string
+          minLength: 10
+          description: |
+            Natural language description of the event. Should include style
+            preferences, budget if known, and any specific requirements.
+            Must be event-related — irrelevant queries return 400.
+          example: "Outdoor wedding for family and friends, warm colours, budget around ₹2 lakhs"
+        guest_count:
+          type: integer
+          minimum: 1
+          description: Number of guests. Used for capacity matching and catering cost calculation.
+          example: 120
+        event_type:
+          type: string
+          description: Event type label from the wizard (e.g. Wedding, Birthday). Optional but improves recommendation quality.
+          example: Wedding
+ 
+    AIRecommendItem:
+      type: object
+      description: A single recommended item with the reason for the recommendation and the full DB object attached.
+      properties:
+        id:
+          type: string
+          description: Exact ID of the recommended item from the database.
+          example: v1
+        name:
+          type: string
+          description: Display name (used for venues and themes).
+          example: The Grand Pavilion
+        label:
+          type: string
+          description: Display label (used for packages).
+          example: Premium
+        reason:
+          type: string
+          description: One sentence explanation of why this item was recommended.
+          example: "Fits 120 guests comfortably with room for a stage setup."
+        full:
+          type: object
+          description: |
+            Complete database object for this item (same shape as the relevant
+            GET endpoint response). Included so the frontend can directly apply
+            the recommendation to wizard state without additional lookups.
+          additionalProperties: true
+ 
+    AIRecommendResponse:
+      type: object
+      properties:
+        is_relevant:
+          type: boolean
+          description: Always true for successful responses. False responses return 400 before reaching this point.
+          example: true
+        venue:
+          $ref: '#/components/schemas/AIRecommendItem'
+        theme:
+          $ref: '#/components/schemas/AIRecommendItem'
+        guest_count:
+          type: integer
+          description: Echoed back from the request.
+          example: 120
+        event_package:
+          $ref: '#/components/schemas/AIRecommendItem'
+        photography:
+          $ref: '#/components/schemas/AIRecommendItem'
+        catering:
+          $ref: '#/components/schemas/AIRecommendItem'
+        summary:
+          type: string
+          description: One sentence overview of the full recommendation.
+          example: "A Premium wedding at The Grand Pavilion with Royal Marigold theme and Royal Feast catering."
+        budget_mentioned:
+          type: number
+          nullable: true
+          description: Budget in rupees extracted from the description, or null if not mentioned.
+          example: 200000
+        budget_warning:
+          type: string
+          nullable: true
+          description: |
+            Warning message when the recommendation exceeds the stated budget by
+            more than 20%, or when the budget cannot cover the minimum possible cost.
+            Null when no budget was mentioned or the budget is sufficient.
+          example: "The recommended combination totals ₹2,15,000, which is above your budget of ₹2,00,000."
+        capacity_warning:
+          type: string
+          nullable: true
+          description: |
+            Warning message when no venue can accommodate the requested guest count.
+            Null when a fitting venue was found (or silently swapped to).
+          example: "None of our venues can accommodate 600 guests. Our largest venue fits 300 guests."
+        actual_total:
+          type: number
+          description: Calculated total cost for the recommended combination based on guest count.
+          example: 215000.0
+ 
+    # ── Booking Review ────────────────────────────────────────────
+    BookingReviewResponse:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: One sentence overall assessment referencing the booking reference and event type.
+          example: "EVT-A3F2K is a confirmed wedding booking at The Grand Pavilion with strong package selections."
+        flags:
+          type: array
+          items:
+            type: string
+          description: |
+            List of specific concerns with actual values from the booking data.
+            Empty list if no concerns are found.
+          example:
+            - "Guest count of 280 is close to venue capacity of 300 — discuss seating plan."
+            - "Event date is in 10 days — confirm all vendor arrangements immediately."
+        suggestion:
+          type: string
+          description: One recommended next action for the manager, starting with a verb and referencing the meeting date if present.
+          example: "Confirm vendor readiness and contact the customer before the meeting on 2026-08-15."
+
+
+# ════════════════════════════════════════════════════════════════
+# PATHS
+# ════════════════════════════════════════════════════════════════
+paths:
+
+  # ── AUTH ──────────────────────────────────────────────────────
+
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: Register a new customer account
+      description: |
+        Creates a new user account with role 'customer'.
+        Maps to user story **US-C1**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+      responses:
+        201:
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        400:
+          description: Validation error — missing or invalid fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        409:
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Conflict
+                message: An account with this email already exists
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login as customer or staff
+      description: |
+        Authenticates a user and returns a JWT token.
+        The `role` field in the response determines which dashboard to redirect to.
+        Maps to user stories **US-C1**, **US-M1**, **US-A1**.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        200:
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        400:
+          description: Missing or invalid request body fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  email: ["Email is required"]
+                  password: ["Password is required"]
+        401:
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Invalid email or password
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current logged-in user
+      description: |
+        Returns the profile of the authenticated user.
+        Used to restore session on page reload from localStorage token.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+  # ── EVENT TYPES ───────────────────────────────────────────────
+
+  /event-types:
+    get:
+      tags: [Event Types]
+      summary: Get all event types
+      description: |
+        Returns all available event types shown in wizard step 1.
+        Examples — Wedding, Birthday, Corporate, Social Event.
+        Maps to user story **US-C1**.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of event types
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_types:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EventType'
+              example:
+                event_types:
+                  - id: et1
+                    label: Wedding
+                    description: Intimate to grand celebrations
+                    icon: "💍"
+                  - id: et2
+                    label: Birthday
+                    description: Milestone birthday parties
+                    icon: "🎂"
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+  # ── VENUES ────────────────────────────────────────────────────
+
+  /venues:
+    get:
+      tags: [Venues]
+      summary: Get all available venues
+      description: |
+        Returns venues where `is_available` is true.
+        Used by the event planner wizard step 2.
+        Maps to user story **US-C1**.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of available venues
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  venues:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Venue'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+    post:
+      tags: [Venues]
+      summary: Add a new venue
+      description: |
+        Admin only. Creates a new venue.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VenueRequest'
+      responses:
+        201:
+          description: Venue created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Venue'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  name: ["Venue name is required"]
+                  capacity: ["Capacity must be a positive integer"]
+                  price: ["Price must be a valid number"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /venues/all:
+    get:
+      tags: [Venues]
+      summary: Get all venues including unavailable ones
+      description: |
+        Admin only. Returns all venues regardless of availability.
+        Used by the admin venue management page.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      responses:
+        200:
+          description: List of all venues
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  venues:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Venue'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /venues/{venue_id}:
+    get:
+      tags: [Venues]
+      summary: Get a single venue by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: venue_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: v1
+      responses:
+        200:
+          description: Venue details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Venue'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        404:
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Venue with id v99 does not exist
+
+    put:
+      tags: [Venues]
+      summary: Update a venue
+      description: |
+        Admin only. Updates venue details or availability.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: venue_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VenueRequest'
+      responses:
+        200:
+          description: Venue updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Venue'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  name: ["Venue name is required"]
+                  capacity: ["Capacity must be a positive integer"]
+                  price: ["Price must be a valid number"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Venue with id v99 does not exist
+
+    delete:
+      tags: [Venues]
+      summary: Delete a venue
+      description: |
+        Admin only. Permanently deletes a venue.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: venue_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Venue deleted successfully
+          content:
+            application/json:
+              example:
+                message: Venue deleted successfully
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Venue not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Venue with id v99 does not exist
+
+  # ── THEMES ────────────────────────────────────────────────────
+
+  /themes:
+    get:
+      tags: [Themes]
+      summary: Get all active themes
+      description: |
+        Returns themes where `is_active` is true, with their image URLs
+        ordered by display_order for the carousel.
+        Used by the event planner wizard step 3.
+        Maps to user stories **US-C1**, **US-C5**.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of active themes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  themes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Theme'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+    post:
+      tags: [Themes]
+      summary: Add a new theme
+      description: |
+        Admin only. Creates a new theme with image URLs.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThemeRequest'
+      responses:
+        201:
+          description: Theme created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Theme'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  name: ["Theme name is required"]
+                  images: ["At least one image URL is required for the carousel"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /themes/all:
+    get:
+      tags: [Themes]
+      summary: Get all themes including inactive ones
+      description: |
+        Admin only. Used by the content management page.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      responses:
+        200:
+          description: List of all themes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  themes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Theme'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /themes/{theme_id}:
+    put:
+      tags: [Themes]
+      summary: Update a theme
+      description: |
+        Admin only. Updates theme details and image URLs.
+        Replaces all existing theme images with the new list provided.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: theme_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThemeRequest'
+      responses:
+        200:
+          description: Theme updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Theme'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  name: ["Theme name is required"]
+                  images: ["At least one image URL is required for the carousel"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Theme not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Theme with id t99 does not exist
+
+    delete:
+      tags: [Themes]
+      summary: Delete a theme
+      description: |
+        Admin only. Deletes theme and all associated images via cascade delete.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: theme_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Theme deleted successfully
+          content:
+            application/json:
+              example:
+                message: Theme deleted successfully
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Theme not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Theme with id t99 does not exist
+
+  # ── PACKAGES ──────────────────────────────────────────────────
+
+  /packages/events:
+    get:
+      tags: [Packages]
+      summary: Get all active event packages
+      description: |
+        Returns active event packages (Basic, Premium, Luxury).
+        Used by wizard step 5. Maps to user story **US-C4**.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of active event packages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  packages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EventPackage'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+    post:
+      tags: [Packages]
+      summary: Add a new event package
+      description: |
+        Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventPackageRequest'
+      responses:
+        201:
+          description: Package created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventPackage'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  label: ["Package label is required"]
+                  price: ["Price must be a positive number"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /packages/events/{package_id}:
+    put:
+      tags: [Packages]
+      summary: Update an event package
+      description: Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: package_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventPackageRequest'
+      responses:
+        200:
+          description: Package updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventPackage'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  label: ["Package label is required"]
+                  price: ["Price must be a positive number"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Package with id p99 does not exist
+
+    delete:
+      tags: [Packages]
+      summary: Delete an event package
+      description: Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: package_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Package deleted
+          content:
+            application/json:
+              example:
+                message: Package deleted successfully
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Package with id p99 does not exist
+
+  /packages/photography:
+    get:
+      tags: [Packages]
+      summary: Get all active photography packages
+      description: |
+        Used by wizard step 6. Maps to user story **US-C4**.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of active photography packages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  packages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PhotographyPackage'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+    post:
+      tags: [Packages]
+      summary: Add a new photography package
+      description: |
+        Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhotographyPackageRequest'
+      responses:
+        201:
+          description: Package created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotographyPackage'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  label: ["Package label is required"]
+                  price: ["Price must be a positive number"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /packages/photography/{package_id}:
+    put:
+      tags: [Packages]
+      summary: Update a photography package
+      description: Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: package_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhotographyPackageRequest'
+      responses:
+        200:
+          description: Package updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotographyPackage'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  label: ["Package label is required"]
+                  price: ["Price must be a positive number"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Package with id p99 does not exist
+
+    delete:
+      tags: [Packages]
+      summary: Delete a photography package
+      description: Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: package_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Package deleted
+          content:
+            application/json:
+              example:
+                message: Package deleted successfully
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Package with id p99 does not exist
+
+  /packages/catering:
+    get:
+      tags: [Packages]
+      summary: Get all active catering packages
+      description: |
+        Used by wizard step 7.
+        Note: pricing is `price_per_head` — multiply by `guest_count` for the total catering cost.
+        Maps to user stories **US-C4**, **US-C6**.
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: List of active catering packages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  packages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CateringPackage'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+    post:
+      tags: [Packages]
+      summary: Add a new catering package
+      description: |
+        Admin only. Uses `price_per_head` not `price`.
+        Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CateringPackageRequest'
+      responses:
+        201:
+          description: Package created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CateringPackage'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  label: ["Package label is required"]
+                  price_per_head: ["Price per head is required for catering packages"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /packages/catering/{package_id}:
+    put:
+      tags: [Packages]
+      summary: Update a catering package
+      description: Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: package_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CateringPackageRequest'
+      responses:
+        200:
+          description: Package updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CateringPackage'
+        400:
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  label: ["Package label is required"]
+                  price_per_head: ["Price per head is required for catering packages"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Package with id p99 does not exist
+
+    delete:
+      tags: [Packages]
+      summary: Delete a catering package
+      description: Admin only. Maps to user story **US-A3**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: package_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Package deleted
+          content:
+            application/json:
+              example:
+                message: Package deleted successfully
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Package not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Package with id p99 does not exist
+
+  # ── BOOKINGS ──────────────────────────────────────────────────
+
+  /bookings:
+    post:
+      tags: [Bookings]
+      summary: Create a new booking
+      description: |
+        Customer only. Submits the completed event planner wizard.
+        Requires both `event_date` (the actual event day) and
+        `meeting_date` + `meeting_time` (the consultation appointment).
+        Generates a unique booking reference (e.g. EVT-A3F2K).
+        Returns 409 if the venue is already booked on the same `event_date`
+        by a non-cancelled booking.
+        Maps to user stories **US-C1**, **US-C2**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [customer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingRequest'
+      responses:
+        201:
+          description: Booking created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        400:
+          description: Validation error — missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  venue_id: ["A venue must be selected"]
+                  guest_count: ["Guest count is required for cost calculation"]
+                  event_date: ["Please select the date your event will take place"]
+                  meeting_date: ["Please select a date for the manager meeting"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        409:
+          description: Venue already booked on selected event date
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Conflict
+                message: This venue is already booked on the selected event date
+
+  /bookings/my:
+    get:
+      tags: [Bookings]
+      summary: Get all bookings for the logged-in customer
+      description: |
+        Customer only. Returns all bookings belonging to the
+        authenticated user, ordered by `created_at` descending.
+        Used by the customer dashboard upcoming and past bookings sections.
+        Maps to user story **US-C1**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [customer]
+      responses:
+        200:
+          description: List of customer bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bookings:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Booking'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+  /bookings/all:
+    get:
+      tags: [Bookings]
+      summary: Get all bookings across all customers
+      description: |
+        Manager and Admin only. Returns all bookings with full
+        related objects expanded (user, venue, theme, packages).
+        Supports optional `status` filter via query parameter.
+        Passing `status=pending` effectively implements a new bookings
+        notification feed for managers.
+        Used by manager dashboard and admin scheduled events.
+        Maps to user stories **US-M1**, **US-M2**, **US-M3**, **US-A1**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [manager, admin]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, confirmed, cancelled]
+          description: Filter bookings by status
+          example: confirmed
+      responses:
+        200:
+          description: List of all bookings with full details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bookings:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Booking'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Manager or Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /bookings/conflicts:
+    get:
+      tags: [Bookings]
+      summary: Get all bookings with scheduling conflicts
+      description: |
+        Manager and Admin only. Returns groups of non-cancelled bookings
+        that share the same `venue_id` and `event_date` — indicating a
+        genuine double-booking at the same venue on the same day.
+        Meeting date and time are not considered for conflict detection.
+        Used by the manager alerts section.
+        Maps to user story **US-M4**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [manager, admin]
+      responses:
+        200:
+          description: Grouped conflict bookings
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conflicts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        venue:
+                          type: string
+                          description: Venue name
+                          example: The Grand Pavilion
+                        date:
+                          type: string
+                          format: date
+                          description: The event_date shared by conflicting bookings
+                          example: "2026-09-20"
+                        bookings:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/Booking'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Manager or Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+
+  /bookings/slots:
+    get:
+      tags: [Bookings]
+      summary: Get taken meeting time slots for a venue and date
+      description: |
+        Authenticated users (all roles). Returns a list of meeting time strings
+        that are already taken for the given venue and meeting date.
+        Cancelled bookings do not occupy slots.
+        Used by the meeting scheduler page to disable already-booked time slots
+        in the UI so customers cannot double-book a meeting.
+        Maps to user story **US-C2**.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: venue_id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: ID of the venue to check slots for
+          example: v1
+        - name: meeting_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          description: The meeting date to check
+          example: "2026-08-15"
+      responses:
+        200:
+          description: List of taken meeting time strings for the given venue and date
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  taken_slots:
+                    type: array
+                    items:
+                      type: string
+                    example: ["10:00 AM", "11:00 AM", "02:00 PM"]
+        400:
+          description: Missing required query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Bad request
+                message: venue_id and meeting_date are required
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+
+  /bookings/{booking_id}:
+    get:
+      tags: [Bookings]
+      summary: Get a single booking by ID
+      description: |
+        Manager and Admin can view any booking.
+        Customer can only view their own booking.
+        Returns full details with all related objects expanded
+        (user, venue, theme, event_package, photography_package, catering_package).
+        Used by the manager booking detail page.
+        Maps to user story **US-M2**.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+      responses:
+        200:
+          description: Full booking detail with all related objects expanded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Not authorized to view this booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to view this booking
+        404:
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Booking with id xyz does not exist
+
+  /bookings/{booking_id}/status:
+    patch:
+      tags: [Bookings]
+      summary: Update booking status
+      description: |
+        Manager and Admin only. Updates the status of a booking
+        to `confirmed` or `cancelled`.
+        Returns the full expanded booking object (via `to_dict_full()`) so the
+        UI does not lose related object data after a status change.
+        Maps to user stories **US-M1**, **US-M4**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [manager, admin]
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingStatusUpdate'
+      responses:
+        200:
+          description: Status updated — returns full expanded booking object
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        400:
+          description: Invalid status value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+              example:
+                error: Validation error
+                messages:
+                  status: ["Must be one of: pending, confirmed, cancelled"]
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Not authorized to view this booking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to view this booking
+        404:
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Booking with id xyz does not exist
+
+  # ── ADMIN ─────────────────────────────────────────────────────
+
+  /admin/revenue:
+    get:
+      tags: [Admin]
+      summary: Get monthly revenue report
+      description: |
+        Admin only. Returns revenue grouped by month.
+        `total_revenue` per month = confirmed + pending only (cancelled excluded).
+        `confirmed_revenue` per month = confirmed only.
+        Months with no bookings are zero-filled. Always sorted oldest → newest.
+        Used by the admin revenue reports section.
+        Maps to user story **US-A2**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      parameters:
+        - name: months
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 6
+            minimum: 1
+            maximum: 24
+          description: Number of past months to include in the report
+      responses:
+        200:
+          description: Monthly revenue data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revenue:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        month:
+                          type: string
+                          example: "2026-03"
+                        total_revenue:
+                          type: number
+                          description: Confirmed + pending revenue for the month (excludes cancelled)
+                          example: 295000.0
+                        confirmed_revenue:
+                          type: number
+                          description: Confirmed revenue only for the month
+                          example: 220000.0
+                        booking_count:
+                          type: integer
+                          description: Non-cancelled booking count for the month
+                          example: 6
+                        avg_per_booking:
+                          type: number
+                          description: total_revenue divided by non-cancelled booking count
+                          example: 49166.67
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to view these details
+
+  /admin/stats:
+    get:
+      tags: [Admin]
+      summary: Get overall business statistics
+      description: |
+        Admin only. Returns total bookings, status breakdown,
+        projected revenue (confirmed + pending, excludes cancelled),
+        and confirmed revenue.
+        Used by the admin dashboard overview stat cards.
+        Maps to user story **US-A1**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [admin]
+      responses:
+        200:
+          description: Business statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_bookings:
+                    type: integer
+                    example: 24
+                  confirmed:
+                    type: integer
+                    example: 18
+                  pending:
+                    type: integer
+                    example: 4
+                  cancelled:
+                    type: integer
+                    example: 2
+                  projected_revenue:
+                    type: number
+                    description: Total estimated cost of all confirmed + pending bookings (excludes cancelled)
+                    example: 1445000.0
+                  confirmed_revenue:
+                    type: number
+                    description: Total estimated cost of confirmed bookings only
+                    example: 1230000.0
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to view these details
+
+  # ── CHAT ──────────────────────────────────────────────────────
+
+  /chat:
+    post:
+      tags: [Chat]
+      summary: Send a message to the AI assistant
+      description: |
+        Authenticated users only (all roles). Sends the full conversation
+        history to Claude Haiku and returns the AI reply.
+
+        The system prompt is built dynamically on every request — it fetches
+        live venues, themes, and packages from the database so the AI always
+        has current information.
+
+        Always send the complete message history (all prior user and assistant
+        turns), not just the latest message. This preserves conversation context.
+
+        Maps to user story **US-C3**.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+            example:
+              messages:
+                - role: user
+                  content: What venues do you have?
+      responses:
+        200:
+          description: AI reply successfully generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+              example:
+                reply: "We currently have **The Grand Pavilion** (capacity 500, ₹1,20,000) and **The Garden Terrace** (capacity 200, ₹75,000) available."
+        400:
+          description: Missing or invalid messages array
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Bad request
+                message: messages must be a non-empty array
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        429:
+          description: AI service rate limit reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Too many requests
+                message: AI service rate limit reached
+        503:
+          description: AI service unavailable or not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Service unavailable
+                message: AI chat is not configured on this server
+
+  # ── AI ────────────────────────────────────────────────────────
+ 
+  /ai/recommend:
+    post:
+      tags: [AI]
+      summary: Get an AI-powered event recommendation
+      description: |
+        Customer only. Accepts a natural language event description and guest
+        count, queries the live catalogue (venues, themes, all package types),
+        and returns a fully specified recommendation with one item from each
+        category plus a reason for each choice.
+ 
+        The response includes the full database object for every recommended
+        item so the frontend can directly apply the selection to wizard state
+        without additional API calls.
+ 
+        **Edge case handling:**
+        - If the description is unrelated to event planning, returns 400 with
+          a helpful message asking the customer to describe their event.
+        - If the stated budget cannot cover even the cheapest possible
+          combination, `budget_warning` is populated.
+        - If no venue fits the guest count, `capacity_warning` is populated
+          and the largest available venue is recommended.
+        - If the AI recommends a venue whose capacity is below the guest count
+          but a fitting venue exists, the backend silently swaps to the
+          cheapest fitting venue before responding.
+ 
+        Maps to user story **US-C7**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [customer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIRecommendRequest'
+            example:
+              description: "Outdoor wedding for family and friends, warm colours, budget around ₹2 lakhs"
+              guest_count: 120
+              event_type: Wedding
+      responses:
+        200:
+          description: Recommendation generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIRecommendResponse'
+              example:
+                is_relevant: true
+                venue:
+                  id: v1
+                  name: The Grand Pavilion
+                  reason: "Fits 120 guests comfortably with room for a stage setup."
+                  full: { id: v1, name: "The Grand Pavilion", location: "Coochbehar Central", capacity: 300, price: 120000.0, is_available: true }
+                theme:
+                  id: t1
+                  name: Royal Marigold
+                  reason: "Warm gold tones perfectly suit an outdoor wedding aesthetic."
+                  full: { id: t1, name: "Royal Marigold", description: "Warm golds and deep saffron", is_active: true }
+                guest_count: 120
+                event_package:
+                  id: pk2
+                  label: Premium
+                  reason: "Upgraded florals and two coordinators suit a wedding of this size."
+                  full: { id: pk2, label: "Premium", price: 35000.0, is_active: true }
+                photography:
+                  id: ph2
+                  label: Cinematic
+                  reason: "Full-day coverage ensures every moment is captured."
+                  full: { id: ph2, label: "Cinematic", price: 32000.0, is_active: true }
+                catering:
+                  id: c2
+                  label: Royal Feast
+                  reason: "Multi-cuisine spread suits a diverse wedding guest list."
+                  full: { id: c2, label: "Royal Feast", price_per_head: 950.0, is_active: true, pricePerHead: 950.0 }
+                summary: "A Premium wedding at The Grand Pavilion with Royal Marigold theme and full-day photography."
+                budget_mentioned: 200000
+                budget_warning: "The recommended combination totals ₹2,15,400, which is above your budget of ₹2,00,000. This is our closest match — your manager can help find 			adjustments during the consultation meeting."
+                capacity_warning: null
+                actual_total: 215400.0
+        400:
+          description: |
+            Missing or invalid fields, or description is unrelated to event planning.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Bad request
+                message: "Your description doesn't seem to be about an event. Please tell us about the event you're planning."
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Customer access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        429:
+          description: AI service rate limit reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Too many requests
+                message: AI service rate limit reached
+        503:
+          description: AI service unavailable, not configured, or insufficient catalogue data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Service unavailable
+                message: AI recommendation is not configured on this server
+ 
+  /bookings/{booking_id}/review:
+    get:
+      tags: [AI]
+      summary: Get an AI-generated review of a booking
+      description: |
+        Manager and Admin only. Returns an AI-generated structured assessment
+        of the specified booking.
+ 
+        The review includes:
+        - A one-sentence summary referencing the booking reference and event type
+        - A list of specific flags with actual values (e.g. guest count vs venue
+          capacity, approaching event dates, missing meeting notes)
+        - A suggested next action for the manager
+ 
+        The review is generated fresh on every request. It does not affect
+        booking data in any way.
+ 
+        Maps to user story **US-M5**.
+      security:
+        - BearerAuth: []
+      x-required-roles: [manager, admin]
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+      responses:
+        200:
+          description: AI review generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingReviewResponse'
+              example:
+                summary: "EVT-A3F2K is a confirmed wedding booking at The Grand Pavilion with strong package selections."
+                flags:
+                  - "Guest count of 280 is close to venue capacity of 300 — discuss seating arrangements."
+                  - "Event date is in 10 days — confirm all vendor arrangements immediately."
+                suggestion: "Call the customer before the meeting on 2026-08-15 to confirm the outdoor setup preference."
+        200_no_flags:
+          description: AI review with no flags (all looks good)
+          content:
+            application/json:
+              example:
+                summary: "EVT-B7K2M is a pending birthday booking at The Garden Terrace for 80 guests."
+                flags: []
+                suggestion: "Confirm the booking and reach out to the customer to schedule the consultation."
+        401:
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Unauthorized
+                message: Missing or invalid token
+        403:
+          description: Manager or Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Forbidden
+                message: You do not have permission to perform this action
+        404:
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Not found
+                message: Booking with id xyz does not exist
+        429:
+          description: AI service rate limit reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Too many requests
+                message: AI service rate limit reached
+        503:
+          description: AI service unavailable or not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: Service unavailable
+                message: AI review is not configured on this server
